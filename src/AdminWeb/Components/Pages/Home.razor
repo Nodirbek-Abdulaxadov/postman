@@ -1,0 +1,266 @@
+@page "/"
+@inject AdminSession Session
+@inject AdminApiClient ApiClient
+@inject TrackingRealtimeClient Realtime
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Dashboard</PageTitle>
+
+@if (!Session.IsAuthenticated)
+{
+    <div class="alert alert-warning">
+        Not logged in. <a href="/login">Sign in</a> to access the dashboard.
+    </div>
+    return;
+}
+
+<ConnectionBanner Status="_connectionStatus" IsStale="_isStale" />
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Dashboard</h1>
+    <small class="text-muted">@Session.CurrentUser?.FullName &middot; @Session.CurrentUser?.Role</small>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-xl-3">
+        <div class="card text-bg-primary">
+            <div class="card-body">
+                <div class="fs-3 fw-bold">@_totalOrders</div>
+                <div class="small opacity-75">Total Orders</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card text-bg-warning">
+            <div class="card-body">
+                <div class="fs-3 fw-bold">@_activeOrders</div>
+                <div class="small">Active Deliveries</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card text-bg-success">
+            <div class="card-body">
+                <div class="fs-3 fw-bold">@_deliveredToday</div>
+                <div class="small opacity-75">Delivered Today</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card text-bg-info">
+            <div class="card-body">
+                <div class="fs-3 fw-bold">@_couriers.Count</div>
+                <div class="small">Couriers</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="card-title mb-0">Recent Orders</h5>
+            <a class="btn btn-sm btn-outline-primary" href="/orders">All Orders</a>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Status</th>
+                        <th>Recipient</th>
+                        <th>Address</th>
+                        <th>Created</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var order in _orders.Take(15))
+                    {
+                        <tr>
+                            <td class="fw-semibold">@order.OrderCode</td>
+                            <td><StatusBadge Status="@order.Status" /></td>
+                            <td>@order.RecipientName</td>
+                            <td class="text-truncate" style="max-width:180px">@order.Address</td>
+                            <td>@order.CreatedAt.ToLocalTime().ToString("MM-dd HH:mm")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Orders</h5>
+                <p class="card-text text-muted small">Create orders, assign couriers, and view history.</p>
+                <a class="btn btn-primary btn-sm" href="orders">Open Orders</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Live Tracking</h5>
+                <p class="card-text text-muted small">Branch map with live courier positions.</p>
+                <a class="btn btn-outline-primary btn-sm" href="tracking">Open Tracking</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-body">
+                <h5 class="card-title">Couriers</h5>
+                <p class="card-text text-muted small">View branch couriers and active assignments.</p>
+                <a class="btn btn-outline-primary btn-sm" href="couriers">Open Couriers</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<OrderResponse> _orders = new();
+    private List<UserResponse> _couriers = new();
+    private RealtimeConnectionStatus _connectionStatus = RealtimeConnectionStatus.Disconnected;
+    private bool _isStale;
+    private string? _error;
+
+    private int _totalOrders;
+    private int _activeOrders;
+    private int _deliveredToday;
+
+    private System.Threading.Timer? _staleTimer;
+    private static readonly TimeSpan StaleThreshold = TimeSpan.FromSeconds(60);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            return;
+        }
+
+        await LoadAsync();
+        await StartRealtimeAsync();
+
+        _staleTimer = new System.Threading.Timer(_ =>
+        {
+            var wasStale = _isStale;
+            _isStale = Realtime.LastMessageAt.HasValue &&
+                       DateTimeOffset.UtcNow - Realtime.LastMessageAt.Value > StaleThreshold;
+            if (_isStale != wasStale)
+            {
+                InvokeAsync(StateHasChanged);
+            }
+        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        try
+        {
+            var ordersTask = ApiClient.GetOrdersAsync(new OrderFilterRequest { Limit = 100 });
+            var couriersTask = ApiClient.GetUsersAsync(new UserFilterRequest { Role = UserRole.Courier, Limit = 200 });
+
+            await Task.WhenAll(ordersTask, couriersTask);
+
+            _orders = (await ordersTask).ToList();
+            _couriers = (await couriersTask).ToList();
+            RecalcKpis();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StartRealtimeAsync()
+    {
+        Realtime.ConnectionStatusChanged += OnConnectionStatusChanged;
+        Realtime.StatusUpdated += OnStatusUpdated;
+
+        try
+        {
+            await Realtime.EnsureConnectedAsync();
+
+            if (Session.CurrentUser?.BranchId is { } branchId)
+            {
+                await Realtime.JoinBranchAsync(branchId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Realtime connection failed: {ex.Message}";
+        }
+    }
+
+    private void OnConnectionStatusChanged(RealtimeConnectionStatus status)
+    {
+        _connectionStatus = status;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnStatusUpdated(TrackingStatusUpdateEvent ev)
+    {
+        var order = _orders.FirstOrDefault(o => o.Id == ev.OrderId);
+        if (order is not null && Enum.TryParse<OrderStatus>(ev.Status, out var parsed))
+        {
+            var updated = CloneWithStatus(order, parsed);
+            var idx = _orders.IndexOf(order);
+            _orders[idx] = updated;
+            RecalcKpis();
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void RecalcKpis()
+    {
+        _totalOrders = _orders.Count;
+        _activeOrders = _orders.Count(o => o.Status is
+            OrderStatus.Assigned or OrderStatus.Accepted or OrderStatus.PickedUp or OrderStatus.OnTheWay);
+        var today = DateTimeOffset.UtcNow.Date;
+        _deliveredToday = _orders.Count(o =>
+            o.Status == OrderStatus.Delivered && o.DeliveredAt?.Date == today);
+    }
+
+    private static OrderResponse CloneWithStatus(OrderResponse src, OrderStatus status)
+    {
+        return new OrderResponse
+        {
+            Id = src.Id,
+            OrderCode = src.OrderCode,
+            CustomerId = src.CustomerId,
+            BranchId = src.BranchId,
+            CourierId = src.CourierId,
+            Status = status,
+            RecipientName = src.RecipientName,
+            RecipientPhone = src.RecipientPhone,
+            Address = src.Address,
+            Lat = src.Lat,
+            Lng = src.Lng,
+            AssignedAt = src.AssignedAt,
+            DeliveredAt = src.DeliveredAt,
+            CreatedAt = src.CreatedAt
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _staleTimer?.Dispose();
+        Realtime.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        Realtime.StatusUpdated -= OnStatusUpdated;
+
+        if (Session.CurrentUser?.BranchId is { } branchId)
+        {
+            await Realtime.LeaveBranchAsync(branchId);
+        }
+    }
+}

@@ -1,0 +1,464 @@
+@page "/orders"
+@inject AdminApiClient ApiClient
+@inject AdminSession Session
+@inject TrackingRealtimeClient Realtime
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Orders</PageTitle>
+
+<ConnectionBanner Status="_connectionStatus" IsStale="_isStale" />
+
+<h1>Orders</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(_info))
+{
+    <div class="alert alert-success" role="alert">@_info</div>
+}
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Create Order</h5>
+                <EditForm Model="_createOrder" OnValidSubmit="CreateOrderAsync" FormName="create-order">
+                    @if (Session.CurrentUser?.Role == UserRole.SuperAdmin)
+                    {
+                        <div class="mb-2">
+                            <label class="form-label">Branch ID</label>
+                            <InputText class="form-control" @bind-Value="_createBranchIdInput" />
+                        </div>
+                    }
+
+                    <div class="mb-2">
+                        <label class="form-label">Customer</label>
+                        <InputSelect class="form-select" @bind-Value="_createOrder.CustomerId">
+                            <option value="@Guid.Empty">Select customer</option>
+                            @foreach (var customer in _customers)
+                            {
+                                <option value="@customer.Id">@customer.FullName (@customer.Phone)</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Recipient Name</label>
+                        <InputText class="form-control" @bind-Value="_createOrder.RecipientName" />
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Recipient Phone</label>
+                        <InputText class="form-control" @bind-Value="_createOrder.RecipientPhone" />
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Address</label>
+                        <InputText class="form-control" @bind-Value="_createOrder.Address" />
+                    </div>
+
+                    <div class="row g-2 mb-2">
+                        <div class="col-md-6">
+                            <label class="form-label">Latitude</label>
+                            <InputNumber class="form-control" @bind-Value="_createOrder.Lat" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Longitude</label>
+                            <InputNumber class="form-control" @bind-Value="_createOrder.Lng" />
+                        </div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Create Note (optional)</label>
+                        <InputText class="form-control" @bind-Value="_createOrder.Note" />
+                    </div>
+
+                    <button class="btn btn-primary" disabled="@_busy" type="submit">Create Order</button>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Assign Courier</h5>
+                <EditForm Model="_assign" OnValidSubmit="AssignCourierAsync" FormName="assign-courier">
+                    <div class="mb-2">
+                        <label class="form-label">Order</label>
+                        <InputSelect class="form-select" @bind-Value="_assign.OrderId">
+                            <option value="@Guid.Empty">Select created order</option>
+                            @foreach (var order in _orders.Where(o => o.Status == OrderStatus.Created))
+                            {
+                                <option value="@order.Id">@order.OrderCode</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Courier</label>
+                        <InputSelect class="form-select" @bind-Value="_assign.CourierId">
+                            <option value="@Guid.Empty">Select courier</option>
+                            @foreach (var courier in _couriers)
+                            {
+                                <option value="@courier.Id">@courier.FullName (@courier.Phone)</option>
+                            }
+                        </InputSelect>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label">Assignment Note (optional)</label>
+                        <InputText class="form-control" @bind-Value="_assign.Note" />
+                    </div>
+
+                    <button class="btn btn-outline-primary" disabled="@_busy" type="submit">Assign</button>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5 class="card-title mb-0">Order List</h5>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="ReloadAsync" disabled="@_busy">Reload</button>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-sm table-striped table-hover">
+                <thead>
+                    <tr>
+                        <th>Code</th>
+                        <th>Status</th>
+                        <th>Recipient</th>
+                        <th>Courier</th>
+                        <th>Branch</th>
+                        <th>Created</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var order in _orders)
+                    {
+                        <tr>
+                            <td class="fw-semibold">@order.OrderCode</td>
+                            <td><StatusBadge Status="@order.Status" /></td>
+                            <td>@order.RecipientName</td>
+                            <td class="font-monospace small">@(order.CourierId?.ToString("N")[..8] ?? "-")</td>
+                            <td class="font-monospace small">@order.BranchId.ToString("N")[..8]</td>
+                            <td>@order.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>
+                                <button class="btn btn-sm btn-link p-0" @onclick="() => LoadHistoryAsync(order.Id)">History</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+@if (_historyOrderId.HasValue)
+{
+    <div class="card">
+        <div class="card-body">
+            <h5 class="card-title">Order History (@_historyOrderId)</h5>
+
+            <div class="table-responsive">
+                <table class="table table-sm table-striped">
+                    <thead>
+                        <tr>
+                            <th>From</th>
+                            <th>To</th>
+                            <th>Changed By</th>
+                            <th>Note</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _history)
+                        {
+                            <tr>
+                                <td>@item.FromStatus</td>
+                                <td>@item.ToStatus</td>
+                                <td class="font-monospace small">@item.ChangedByUserId.ToString("N")[..8]</td>
+                                <td>@item.Note</td>
+                                <td>@item.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly CreateOrderRequest _createOrder = new()
+    {
+        Lat = 41.311081,
+        Lng = 69.240562
+    };
+
+    private readonly AssignFormModel _assign = new();
+    private List<OrderResponse> _orders = new();
+    private IReadOnlyList<UserResponse> _couriers = Array.Empty<UserResponse>();
+    private IReadOnlyList<UserResponse> _customers = Array.Empty<UserResponse>();
+    private IReadOnlyList<OrderStatusHistoryResponse> _history = Array.Empty<OrderStatusHistoryResponse>();
+    private Guid? _historyOrderId;
+    private string _createBranchIdInput = string.Empty;
+    private bool _busy;
+    private string? _error;
+    private string? _info;
+    private RealtimeConnectionStatus _connectionStatus = RealtimeConnectionStatus.Disconnected;
+    private bool _isStale;
+    private System.Threading.Timer? _staleTimer;
+    private static readonly TimeSpan StaleThreshold = TimeSpan.FromSeconds(60);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!EnsureLoggedIn())
+        {
+            return;
+        }
+
+        await ReloadAsync();
+        await StartRealtimeAsync();
+
+        _staleTimer = new System.Threading.Timer(_ =>
+        {
+            var wasStale = _isStale;
+            _isStale = Realtime.LastMessageAt.HasValue &&
+                       DateTimeOffset.UtcNow - Realtime.LastMessageAt.Value > StaleThreshold;
+            if (_isStale != wasStale)
+            {
+                InvokeAsync(StateHasChanged);
+            }
+        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task StartRealtimeAsync()
+    {
+        Realtime.ConnectionStatusChanged += OnConnectionStatusChanged;
+        Realtime.StatusUpdated += OnStatusUpdated;
+
+        try
+        {
+            await Realtime.EnsureConnectedAsync();
+
+            if (Session.CurrentUser?.BranchId is { } branchId)
+            {
+                await Realtime.JoinBranchAsync(branchId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Realtime unavailable: {ex.Message}";
+        }
+    }
+
+    private void OnConnectionStatusChanged(RealtimeConnectionStatus status)
+    {
+        _connectionStatus = status;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnStatusUpdated(TrackingStatusUpdateEvent ev)
+    {
+        var idx = _orders.FindIndex(o => o.Id == ev.OrderId);
+        if (idx < 0)
+        {
+            return;
+        }
+
+        if (Enum.TryParse<OrderStatus>(ev.Status, out var parsed))
+        {
+            _orders[idx] = CloneWithStatus(_orders[idx], parsed);
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            var ordersTask = ApiClient.GetOrdersAsync(new OrderFilterRequest { Limit = 100 });
+            var couriersTask = ApiClient.GetUsersAsync(new UserFilterRequest { Role = UserRole.Courier, Limit = 100 });
+            var customersTask = ApiClient.GetUsersAsync(new UserFilterRequest { Role = UserRole.Customer, Limit = 100 });
+
+            await Task.WhenAll(ordersTask, couriersTask, customersTask);
+
+            _orders = (await ordersTask).ToList();
+            _couriers = await couriersTask;
+            _customers = await customersTask;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CreateOrderAsync()
+    {
+        _error = null;
+        _info = null;
+
+        if (_createOrder.CustomerId == Guid.Empty)
+        {
+            _error = "Select a customer before creating an order.";
+            return;
+        }
+
+        if (!TryParseOptionalGuid(_createBranchIdInput, out var branchId, out var parseError))
+        {
+            _error = parseError;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _createOrder.BranchId = branchId;
+            var created = await ApiClient.CreateOrderAsync(_createOrder);
+            _info = $"Created order {created.OrderCode}.";
+            _createOrder.Note = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AssignCourierAsync()
+    {
+        _error = null;
+        _info = null;
+
+        if (_assign.OrderId == Guid.Empty || _assign.CourierId == Guid.Empty)
+        {
+            _error = "Select both order and courier for assignment.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var updated = await ApiClient.AssignOrderAsync(_assign.OrderId, new AssignCourierRequest
+            {
+                CourierId = _assign.CourierId,
+                Note = string.IsNullOrWhiteSpace(_assign.Note) ? null : _assign.Note.Trim()
+            });
+
+            _info = $"Order {updated.OrderCode} assigned successfully.";
+            _assign.Note = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadHistoryAsync(Guid orderId)
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            _historyOrderId = orderId;
+            _history = await ApiClient.GetOrderHistoryAsync(orderId);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool EnsureLoggedIn()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login", forceLoad: false);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseOptionalGuid(string input, out Guid? value, out string? error)
+    {
+        value = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return true;
+        }
+
+        if (!Guid.TryParse(input.Trim(), out var parsed))
+        {
+            error = "Branch ID must be a valid GUID.";
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+
+    private static OrderResponse CloneWithStatus(OrderResponse src, OrderStatus status)
+    {
+        return new OrderResponse
+        {
+            Id = src.Id, OrderCode = src.OrderCode, CustomerId = src.CustomerId,
+            BranchId = src.BranchId, CourierId = src.CourierId, Status = status,
+            RecipientName = src.RecipientName, RecipientPhone = src.RecipientPhone,
+            Address = src.Address, Lat = src.Lat, Lng = src.Lng,
+            AssignedAt = src.AssignedAt, DeliveredAt = src.DeliveredAt, CreatedAt = src.CreatedAt
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _staleTimer?.Dispose();
+        Realtime.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        Realtime.StatusUpdated -= OnStatusUpdated;
+
+        if (Session.CurrentUser?.BranchId is { } branchId)
+        {
+            await Realtime.LeaveBranchAsync(branchId);
+        }
+    }
+
+    private sealed class AssignFormModel
+    {
+        public Guid OrderId { get; set; }
+        public Guid CourierId { get; set; }
+        public string? Note { get; set; }
+    }
+}

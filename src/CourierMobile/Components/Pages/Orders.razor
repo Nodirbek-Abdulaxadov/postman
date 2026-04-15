@@ -1,0 +1,93 @@
+@page "/orders"
+@inject CourierApiClient ApiClient
+@inject CourierSessionService Session
+@inject NavigationManager Navigation
+
+<h1>Assigned Orders</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="form-check">
+        <input class="form-check-input" type="checkbox" id="includeCompleted" @bind="_includeCompleted" @bind:after="ReloadAsync" />
+        <label class="form-check-label" for="includeCompleted">Include completed</label>
+    </div>
+    <button class="btn btn-outline-secondary" @onclick="ReloadAsync" disabled="@_busy">Reload</button>
+</div>
+
+@if (_orders.Count == 0)
+{
+    <div class="alert alert-info" role="alert">No assigned orders found.</div>
+}
+else
+{
+    <div class="d-grid gap-2">
+        @foreach (var order in _orders)
+        {
+            <button class="btn btn-light text-start border p-3" @onclick="() => OpenOrder(order.Id)">
+                <div class="fw-semibold">@order.OrderCode</div>
+                <div>@order.RecipientName - @order.RecipientPhone</div>
+                <div class="text-muted small">@order.Address</div>
+                <div class="small mt-1">Status: @order.Status</div>
+            </button>
+        }
+    </div>
+}
+
+@code {
+    private readonly List<OrderResponse> _orders = new();
+    private bool _includeCompleted;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _orders.Clear();
+            var items = await ApiClient.GetAssignedOrdersAsync(_includeCompleted, 100);
+            _orders.AddRange(items);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OpenOrder(Guid orderId)
+    {
+        Navigation.NavigateTo($"/orders/{orderId}", forceLoad: false);
+    }
+
+    private async Task<bool> EnsureAuthenticatedAsync()
+    {
+        await Session.EnsureInitializedAsync(ApiClient);
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login", forceLoad: false);
+            return false;
+        }
+
+        return true;
+    }
+}

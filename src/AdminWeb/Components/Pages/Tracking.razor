@@ -1,0 +1,326 @@
+@page "/tracking"
+@inject AdminSession Session
+@inject AdminApiClient ApiClient
+@inject TrackingRealtimeClient Realtime
+@inject IJSRuntime JS
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Live Tracking</PageTitle>
+
+@if (!Session.IsAuthenticated)
+{
+    <div class="alert alert-warning">Not logged in. <a href="/login">Sign in</a>.</div>
+    return;
+}
+
+<ConnectionBanner Status="_connectionStatus" IsStale="_isStale" />
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Live Tracking</h1>
+    <span class="badge @ConnectionBadgeClass">@_connectionStatus</span>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card h-100">
+            <div class="card-body p-2">
+                <h6 class="card-title mb-2">Active Orders</h6>
+                <div class="list-group list-group-flush" style="max-height:500px;overflow-y:auto">
+                    @foreach (var order in _activeOrders)
+                    {
+                        <button type="button"
+                                class="list-group-item list-group-item-action py-2 @(order.Id == _selectedOrderId ? "active" : "")"
+                                @onclick="() => SelectOrderAsync(order.Id)">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span class="fw-semibold small">@order.OrderCode</span>
+                                <StatusBadge Status="@order.Status" />
+                            </div>
+                            <div class="small text-truncate @(order.Id == _selectedOrderId ? "text-white-50" : "text-muted")">
+                                @order.RecipientName &mdash; @order.Address
+                            </div>
+                        </button>
+                    }
+                    @if (!_activeOrders.Any())
+                    {
+                        <div class="text-muted small p-2">No active orders.</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-body p-0" style="position:relative">
+                <div id="tracking-map" style="height:520px;width:100%;border-radius:0.375rem"></div>
+
+                @if (_selectedOrderId.HasValue)
+                {
+                    <div class="position-absolute top-0 end-0 m-2 bg-white rounded shadow-sm p-2" style="z-index:999;min-width:200px">
+                        @{ var sel = _activeOrders.FirstOrDefault(o => o.Id == _selectedOrderId); }
+                        @if (sel is not null)
+                        {
+                            <div class="fw-semibold small">@sel.OrderCode</div>
+                            <div class="small text-muted">@sel.RecipientName</div>
+                            <div class="small text-muted">@sel.Address</div>
+                            <div class="mt-1"><StatusBadge Status="@sel.Status" /></div>
+                            @if (_lastLocation is not null)
+                            {
+                                <div class="small text-muted mt-1">
+                                    @_lastLocation.Lat.ToString("F5"), @_lastLocation.Lng.ToString("F5")
+                                </div>
+                                <div class="small text-muted">
+                                    @_lastLocation.RecordedAt.ToLocalTime().ToString("HH:mm:ss")
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="small text-muted mt-1">Awaiting courier location...</div>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private const string MapId = "tracking-map";
+
+    private List<OrderResponse> _activeOrders = new();
+    private Guid? _selectedOrderId;
+    private TrackingLocationResponse? _lastLocation;
+    private RealtimeConnectionStatus _connectionStatus = RealtimeConnectionStatus.Disconnected;
+    private bool _isStale;
+    private bool _mapReady;
+    private string? _error;
+
+    private System.Threading.Timer? _staleTimer;
+    private static readonly TimeSpan StaleThreshold = TimeSpan.FromSeconds(60);
+
+    private string ConnectionBadgeClass => _connectionStatus switch
+    {
+        RealtimeConnectionStatus.Connected => "bg-success",
+        RealtimeConnectionStatus.Reconnecting => "bg-warning text-dark",
+        _ => "bg-secondary"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            return;
+        }
+
+        await LoadOrdersAsync();
+        await StartRealtimeAsync();
+
+        _staleTimer = new System.Threading.Timer(_ =>
+        {
+            var wasStale = _isStale;
+            _isStale = Realtime.LastMessageAt.HasValue &&
+                       DateTimeOffset.UtcNow - Realtime.LastMessageAt.Value > StaleThreshold;
+            if (_isStale != wasStale)
+            {
+                InvokeAsync(StateHasChanged);
+            }
+        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && Session.IsAuthenticated)
+        {
+            await InitMapAsync();
+        }
+    }
+
+    private async Task InitMapAsync()
+    {
+        await JS.InvokeVoidAsync("trackingMap.initMap", MapId, 41.311081, 69.240562, 12);
+        _mapReady = true;
+    }
+
+    private async Task LoadOrdersAsync()
+    {
+        try
+        {
+            var all = await ApiClient.GetOrdersAsync(new OrderFilterRequest { Limit = 200 });
+            _activeOrders = all.Where(o => o.Status is
+                OrderStatus.Assigned or OrderStatus.Accepted or OrderStatus.PickedUp or OrderStatus.OnTheWay)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StartRealtimeAsync()
+    {
+        Realtime.ConnectionStatusChanged += OnConnectionStatusChanged;
+        Realtime.LocationUpdated += OnLocationUpdated;
+        Realtime.StatusUpdated += OnStatusUpdated;
+
+        try
+        {
+            await Realtime.EnsureConnectedAsync();
+
+            if (Session.CurrentUser?.BranchId is { } branchId)
+            {
+                await Realtime.JoinBranchAsync(branchId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Realtime connection failed: {ex.Message}";
+        }
+    }
+
+    private async Task SelectOrderAsync(Guid orderId)
+    {
+        if (_selectedOrderId.HasValue && _selectedOrderId != orderId)
+        {
+            await Realtime.LeaveOrderAsync(_selectedOrderId.Value);
+            if (_mapReady)
+            {
+                await JS.InvokeVoidAsync("trackingMap.removeMarker", MapId, _selectedOrderId.Value.ToString());
+            }
+        }
+
+        _selectedOrderId = orderId;
+        _lastLocation = null;
+
+        try
+        {
+            await Realtime.JoinOrderAsync(orderId);
+            _lastLocation = await ApiClient.GetLatestOrderLocationAsync(orderId);
+
+            if (_lastLocation is not null && _mapReady)
+            {
+                await PlaceMarkerAsync(_lastLocation);
+            }
+
+            var order = _activeOrders.FirstOrDefault(o => o.Id == orderId);
+            if (order is not null && _mapReady)
+            {
+                await JS.InvokeVoidAsync("trackingMap.setMarker", MapId,
+                    $"dest:{orderId}", order.Lat, order.Lng, $"Destination: {order.Address}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private void OnConnectionStatusChanged(RealtimeConnectionStatus status)
+    {
+        _connectionStatus = status;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnLocationUpdated(TrackingLocationUpdateEvent ev)
+    {
+        if (ev.OrderId != _selectedOrderId)
+        {
+            return;
+        }
+
+        _lastLocation = new TrackingLocationResponse
+        {
+            CourierId = ev.CourierId,
+            OrderId = ev.OrderId,
+            BranchId = ev.BranchId,
+            Lat = ev.Lat,
+            Lng = ev.Lng,
+            RecordedAt = ev.RecordedAt
+        };
+
+        InvokeAsync(async () =>
+        {
+            if (_mapReady)
+            {
+                await PlaceMarkerAsync(_lastLocation!);
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void OnStatusUpdated(TrackingStatusUpdateEvent ev)
+    {
+        var order = _activeOrders.FirstOrDefault(o => o.Id == ev.OrderId);
+        if (order is null)
+        {
+            return;
+        }
+
+        if (Enum.TryParse<OrderStatus>(ev.Status, out var parsed))
+        {
+            var idx = _activeOrders.IndexOf(order);
+            _activeOrders[idx] = CloneWithStatus(order, parsed);
+        }
+
+        if (ev.StatusCode >= (int)OrderStatus.Delivered)
+        {
+            _activeOrders.RemoveAll(o => o.Id == ev.OrderId);
+            if (_selectedOrderId == ev.OrderId)
+            {
+                _selectedOrderId = null;
+                _lastLocation = null;
+            }
+        }
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task PlaceMarkerAsync(TrackingLocationResponse loc)
+    {
+        await JS.InvokeVoidAsync("trackingMap.setMarker", MapId,
+            loc.OrderId.ToString(), loc.Lat, loc.Lng,
+            $"Courier &bull; {loc.RecordedAt.ToLocalTime():HH:mm:ss}");
+        await JS.InvokeVoidAsync("trackingMap.panTo", MapId, loc.Lat, loc.Lng);
+    }
+
+    private static OrderResponse CloneWithStatus(OrderResponse src, OrderStatus status)
+    {
+        return new OrderResponse
+        {
+            Id = src.Id, OrderCode = src.OrderCode, CustomerId = src.CustomerId,
+            BranchId = src.BranchId, CourierId = src.CourierId, Status = status,
+            RecipientName = src.RecipientName, RecipientPhone = src.RecipientPhone,
+            Address = src.Address, Lat = src.Lat, Lng = src.Lng,
+            AssignedAt = src.AssignedAt, DeliveredAt = src.DeliveredAt, CreatedAt = src.CreatedAt
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _staleTimer?.Dispose();
+        Realtime.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        Realtime.LocationUpdated -= OnLocationUpdated;
+        Realtime.StatusUpdated -= OnStatusUpdated;
+
+        if (_selectedOrderId.HasValue)
+        {
+            await Realtime.LeaveOrderAsync(_selectedOrderId.Value);
+        }
+
+        if (Session.CurrentUser?.BranchId is { } branchId)
+        {
+            await Realtime.LeaveBranchAsync(branchId);
+        }
+
+        if (_mapReady)
+        {
+            try { await JS.InvokeVoidAsync("trackingMap.removeMap", MapId); } catch { }
+        }
+    }
+}

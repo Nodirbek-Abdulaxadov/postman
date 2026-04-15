@@ -1,0 +1,171 @@
+@PostalDeliverySystem.Api_HostAddress = http://localhost:5291
+@accessToken = REPLACE_WITH_ACCESS_TOKEN
+@refreshToken = REPLACE_WITH_REFRESH_TOKEN
+@courierAccessToken = REPLACE_WITH_COURIER_ACCESS_TOKEN
+@customerAccessToken = REPLACE_WITH_CUSTOMER_ACCESS_TOKEN
+@trackingOrderId = 00000000-0000-0000-0000-000000000000
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/auth/bootstrap-superadmin
+Content-Type: application/json
+
+{
+	"fullName": "Root SuperAdmin",
+	"phone": "+998900000001",
+	"password": "SuperAdmin123!"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+	"phone": "+998900000001",
+	"password": "SuperAdmin123!"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/auth/refresh
+Content-Type: application/json
+
+{
+	"refreshToken": "{{refreshToken}}"
+}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/auth/me
+Authorization: Bearer {{accessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/users?role=Customer&limit=20
+Authorization: Bearer {{accessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/customer/orders?limit=20
+Authorization: Bearer {{customerAccessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/customer/orders/{{trackingOrderId}}
+Authorization: Bearer {{customerAccessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/customer/orders/{{trackingOrderId}}/history
+Authorization: Bearer {{customerAccessToken}}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/orders
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+	"customerId": "00000000-0000-0000-0000-000000000000",
+	"recipientName": "Receiver Name",
+	"recipientPhone": "+998900000099",
+	"address": "Tashkent, Sample street 1",
+	"lat": 41.311081,
+	"lng": 69.240562,
+	"note": "Created from API smoke test"
+}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/orders?limit=20
+Authorization: Bearer {{accessToken}}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/assign
+Authorization: Bearer {{accessToken}}
+Content-Type: application/json
+
+{
+	"courierId": "00000000-0000-0000-0000-000000000000",
+	"note": "Assigned by branch admin"
+}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/orders/00000000-0000-0000-0000-000000000000/history
+Authorization: Bearer {{accessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders?includeCompleted=false&limit=20
+Authorization: Bearer {{courierAccessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{courierAccessToken}}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders/00000000-0000-0000-0000-000000000000/accept
+Authorization: Bearer {{courierAccessToken}}
+Content-Type: application/json
+
+{
+	"note": "Accepted by courier"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders/00000000-0000-0000-0000-000000000000/pickup
+Authorization: Bearer {{courierAccessToken}}
+Content-Type: application/json
+
+{
+	"note": "Parcel picked up"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders/00000000-0000-0000-0000-000000000000/on-the-way
+Authorization: Bearer {{courierAccessToken}}
+Content-Type: application/json
+
+{
+	"note": "Started delivery"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/courier/orders/00000000-0000-0000-0000-000000000000/deliver
+Authorization: Bearer {{courierAccessToken}}
+Content-Type: application/json
+
+{
+	"note": "Delivered successfully"
+}
+
+###
+
+POST {{PostalDeliverySystem.Api_HostAddress}}/api/tracking/location
+Authorization: Bearer {{courierAccessToken}}
+Content-Type: application/json
+
+{
+	"courierId": "00000000-0000-0000-0000-000000000000",
+	"orderId": "{{trackingOrderId}}",
+	"lat": 41.311081,
+	"lng": 69.240562,
+	"accuracyMeters": 8.2,
+	"speedMps": 4.5,
+	"deviceTime": "2026-04-15T10:30:00Z"
+}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/api/tracking/orders/{{trackingOrderId}}/latest-location
+Authorization: Bearer {{accessToken}}
+
+###
+
+GET {{PostalDeliverySystem.Api_HostAddress}}/health

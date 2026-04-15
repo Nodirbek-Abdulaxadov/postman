@@ -1,0 +1,65 @@
+@page "/login"
+@inject AdminApiClient ApiClient
+@inject AdminSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Login</PageTitle>
+
+<h1>Admin Login</h1>
+<p class="text-muted">Use an Admin or SuperAdmin account to access branch operations.</p>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<EditForm Model="_login" OnValidSubmit="SubmitAsync" FormName="admin-login">
+    <div class="mb-3">
+        <label class="form-label">Phone</label>
+        <InputText class="form-control" @bind-Value="_login.Phone" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Password</label>
+        <InputText class="form-control" type="password" @bind-Value="_login.Password" />
+    </div>
+
+    <button class="btn btn-primary" disabled="@_busy" type="submit">
+        @(_busy ? "Signing in..." : "Sign in")
+    </button>
+</EditForm>
+
+@code {
+    private readonly LoginRequest _login = new();
+    private bool _busy;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        if (Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/orders", forceLoad: false);
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            var tokens = await ApiClient.LoginAsync(_login);
+            Session.Set(tokens);
+            Navigation.NavigateTo("/orders", forceLoad: false);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

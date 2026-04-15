@@ -1,0 +1,104 @@
+@page "/"
+@inject CustomerApiClient ApiClient
+@inject CustomerSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>My Orders</PageTitle>
+
+@if (!Session.IsAuthenticated)
+{
+    <div class="row justify-content-center mt-5">
+        <div class="col-md-6 text-center">
+            <h2>Track Your Delivery</h2>
+            <p class="text-muted">Sign in to view and track your orders in real time.</p>
+            <a class="btn btn-primary" href="/login">Sign In</a>
+        </div>
+    </div>
+    return;
+}
+
+<h1>My Orders</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+<div class="mb-3">
+    <button class="btn btn-outline-secondary btn-sm" @onclick="LoadAsync" disabled="@_busy">Reload</button>
+</div>
+
+@if (_orders.Count == 0 && !_busy)
+{
+    <div class="alert alert-info">No orders found.</div>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var order in _orders)
+        {
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 @(IsActive(order.Status) ? "border-warning" : "")">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <h6 class="card-title mb-0 fw-bold">@order.OrderCode</h6>
+                            <StatusBadge Status="@order.Status" />
+                        </div>
+                        <p class="card-text small text-muted mb-1">@order.RecipientName</p>
+                        <p class="card-text small text-muted mb-2">@order.Address</p>
+                        <p class="card-text small text-muted mb-3">
+                            @order.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                        </p>
+                        @if (IsActive(order.Status))
+                        {
+                            <a class="btn btn-warning btn-sm" href="/track/@order.Id">Live Track</a>
+                        }
+                        else
+                        {
+                            <a class="btn btn-outline-secondary btn-sm" href="/track/@order.Id">View Details</a>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<OrderResponse> _orders = new();
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            return;
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            var result = await ApiClient.GetMyOrdersAsync();
+            _orders = result.ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static bool IsActive(OrderStatus status) =>
+        status is OrderStatus.Assigned or OrderStatus.Accepted or OrderStatus.PickedUp or OrderStatus.OnTheWay;
+}

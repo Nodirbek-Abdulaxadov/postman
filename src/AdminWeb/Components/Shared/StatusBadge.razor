@@ -1,0 +1,19 @@
+@using PostalDeliverySystem.Domain.Enums
+
+<span class="badge @BadgeClass">@Status</span>
+
+@code {
+    [Parameter, EditorRequired] public OrderStatus Status { get; set; }
+
+    private string BadgeClass => Status switch
+    {
+        OrderStatus.Created   => "bg-secondary",
+        OrderStatus.Assigned  => "bg-primary",
+        OrderStatus.Accepted  => "bg-info text-dark",
+        OrderStatus.PickedUp  => "bg-warning text-dark",
+        OrderStatus.OnTheWay  => "bg-warning text-dark",
+        OrderStatus.Delivered => "bg-success",
+        OrderStatus.Cancelled => "bg-danger",
+        _                     => "bg-secondary"
+    };
+}

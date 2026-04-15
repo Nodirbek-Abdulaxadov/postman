@@ -1,0 +1,71 @@
+@page "/login"
+@inject CourierApiClient ApiClient
+@inject CourierSessionService Session
+@inject NavigationManager Navigation
+
+<h1>Courier Login</h1>
+<p class="text-muted">Sign in to restore your assigned delivery tasks.</p>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<EditForm Model="_login" OnValidSubmit="SubmitAsync">
+    <div class="mb-3">
+        <label class="form-label">Phone</label>
+        <InputText class="form-control form-control-lg" @bind-Value="_login.Phone" />
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label">Password</label>
+        <InputText class="form-control form-control-lg" type="password" @bind-Value="_login.Password" />
+    </div>
+
+    <button class="btn btn-primary btn-lg w-100" type="submit" disabled="@_busy">
+        @(_busy ? "Signing in..." : "Sign In")
+    </button>
+</EditForm>
+
+@code {
+    private readonly LoginRequest _login = new();
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await Session.EnsureInitializedAsync(ApiClient);
+            if (Session.IsAuthenticated)
+            {
+                Navigation.NavigateTo("/orders", forceLoad: false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var tokens = await ApiClient.LoginAsync(_login);
+            await Session.SetAsync(tokens);
+            Navigation.NavigateTo("/orders", forceLoad: false);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

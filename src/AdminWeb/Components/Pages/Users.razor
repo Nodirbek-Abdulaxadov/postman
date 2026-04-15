@@ -1,0 +1,161 @@
+@page "/users"
+@inject AdminApiClient ApiClient
+@inject AdminSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Users</PageTitle>
+
+<h1>Users</h1>
+<p class="text-muted">Filtered branch-scoped user listing for operational administration.</p>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<div class="row g-2 mb-3">
+    <div class="col-md-3">
+        <label class="form-label">Role</label>
+        <InputSelect class="form-select" @bind-Value="_selectedRole">
+            @foreach (var role in _availableRoles)
+            {
+                <option value="@role">@role</option>
+            }
+        </InputSelect>
+    </div>
+
+    @if (Session.CurrentUser?.Role == UserRole.SuperAdmin)
+    {
+        <div class="col-md-6">
+            <label class="form-label">Branch ID (optional)</label>
+            <InputText class="form-control" @bind-Value="_branchIdInput" />
+        </div>
+    }
+
+    <div class="col-md-3 d-flex align-items-end">
+        <button class="btn btn-outline-secondary w-100" @onclick="LoadAsync" disabled="@_busy">Apply Filter</button>
+    </div>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-sm table-striped">
+        <thead>
+            <tr>
+                <th>Role</th>
+                <th>Full Name</th>
+                <th>Phone</th>
+                <th>Branch</th>
+                <th>Active</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var user in _users)
+            {
+                <tr>
+                    <td>@user.Role</td>
+                    <td>@user.FullName</td>
+                    <td>@user.Phone</td>
+                    <td>@user.BranchId</td>
+                    <td>@user.IsActive</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private UserRole[] _availableRoles =
+    [
+        UserRole.Admin,
+        UserRole.Courier,
+        UserRole.Customer
+    ];
+
+    private UserRole _selectedRole = UserRole.Customer;
+    private IReadOnlyList<UserResponse> _users = Array.Empty<UserResponse>();
+    private string _branchIdInput = string.Empty;
+    private bool _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!EnsureLoggedIn())
+        {
+            return;
+        }
+
+        if (Session.CurrentUser?.Role == UserRole.SuperAdmin)
+        {
+            _availableRoles =
+            [
+                UserRole.SuperAdmin,
+                UserRole.Admin,
+                UserRole.Courier,
+                UserRole.Customer
+            ];
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+
+        if (!TryParseOptionalGuid(_branchIdInput, out var branchId, out var parseError))
+        {
+            _error = parseError;
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            _users = await ApiClient.GetUsersAsync(new UserFilterRequest
+            {
+                BranchId = branchId,
+                Role = _selectedRole,
+                Limit = 200
+            });
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private bool EnsureLoggedIn()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login", forceLoad: false);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseOptionalGuid(string input, out Guid? value, out string? error)
+    {
+        value = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            return true;
+        }
+
+        if (!Guid.TryParse(input.Trim(), out var parsed))
+        {
+            error = "Branch ID must be a valid GUID.";
+            return false;
+        }
+
+        value = parsed;
+        return true;
+    }
+}

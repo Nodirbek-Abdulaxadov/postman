@@ -1,0 +1,48 @@
+﻿@page "/"
+@inject NavigationManager Navigation
+@inject CourierSessionService Session
+@inject CourierApiClient ApiClient
+
+<h1>Courier Dashboard</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+	<div class="alert alert-danger" role="alert">@_error</div>
+}
+
+@if (Session.IsAuthenticated)
+{
+	<p class="mb-3">You are signed in. Continue to assigned tasks.</p>
+	<button class="btn btn-primary btn-lg w-100 mb-2" @onclick="OpenOrders">Open Assigned Orders</button>
+}
+else
+{
+	<p class="mb-3">Sign in with your courier account to continue.</p>
+	<button class="btn btn-primary btn-lg w-100" @onclick="OpenLogin">Go To Login</button>
+}
+
+@code {
+	private string? _error;
+
+	protected override async Task OnInitializedAsync()
+	{
+		try
+		{
+			await Session.EnsureInitializedAsync(ApiClient);
+		}
+		catch (Exception ex)
+		{
+			_error = ex.Message;
+		}
+	}
+
+	private void OpenLogin()
+	{
+		Navigation.NavigateTo("/login", forceLoad: false);
+	}
+
+	private void OpenOrders()
+	{
+		Navigation.NavigateTo("/orders", forceLoad: false);
+	}
+}

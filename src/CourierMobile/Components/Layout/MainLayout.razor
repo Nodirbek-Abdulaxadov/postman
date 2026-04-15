@@ -1,0 +1,41 @@
+﻿@inherits LayoutComponentBase
+@inject CourierSessionService Session
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4 justify-content-between">
+            <span>
+                @if (Session.CurrentUser is null)
+                {
+                    <span>No active session</span>
+                }
+                else
+                {
+                    <span>@Session.CurrentUser.FullName (@Session.CurrentUser.Role)</span>
+                }
+            </span>
+
+            @if (Session.IsAuthenticated)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="LogoutAsync">Logout</button>
+            }
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+@code {
+    private async Task LogoutAsync()
+    {
+        await Session.ClearAsync();
+        Navigation.NavigateTo("/login", forceLoad: false);
+    }
+}

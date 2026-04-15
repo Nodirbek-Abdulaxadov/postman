@@ -1,0 +1,100 @@
+services:
+
+  # ─── Infrastructure ─────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16
+    container_name: postal-delivery-postgres
+    environment:
+      POSTGRES_DB: postal_delivery
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "57123:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postal_delivery"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: postal-delivery-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Application services ────────────────────────────────────────────────────
+
+  api:
+    build:
+      context: .
+      dockerfile: src/Api/Dockerfile
+    container_name: postal-delivery-api
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      Database__ConnectionString: "Host=postgres;Port=5432;Database=postal_delivery;Username=postgres;Password=postgres"
+      Redis__ConnectionString: "redis:6379"
+      Jwt__Issuer: PostalDeliverySystem
+      Jwt__Audience: PostalDeliverySystem.Clients
+      Jwt__SigningKey: "${JWT_SIGNING_KEY:-ChangeThisInProductionToAtLeast32Chars_2026}"
+      Jwt__AccessTokenMinutes: "15"
+    ports:
+      - "5000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  adminweb:
+    build:
+      context: .
+      dockerfile: src/AdminWeb/Dockerfile
+    container_name: postal-delivery-adminweb
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ApiClient__BaseUrl: "http://api:8080"
+    ports:
+      - "5150:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  customerweb:
+    build:
+      context: .
+      dockerfile: src/CustomerWeb/Dockerfile
+    container_name: postal-delivery-customerweb
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ApiClient__BaseUrl: "http://api:8080"
+    ports:
+      - "5181:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

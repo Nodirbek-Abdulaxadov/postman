@@ -1,0 +1,214 @@
+@page "/couriers"
+@inject AdminApiClient ApiClient
+@inject AdminSession Session
+@inject TrackingRealtimeClient Realtime
+@inject NavigationManager Navigation
+@implements IAsyncDisposable
+
+<PageTitle>Couriers</PageTitle>
+
+<ConnectionBanner Status="_connectionStatus" IsStale="_isStale" />
+
+<h1>Couriers</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<div class="mb-3">
+    <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_busy">Reload</button>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-sm table-striped table-hover">
+        <thead>
+            <tr>
+                <th>Full Name</th>
+                <th>Phone</th>
+                <th>Branch</th>
+                <th>Active</th>
+                <th>Active Task</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var courier in _couriers)
+            {
+                var activeOrder = _activeOrdersByCourier.GetValueOrDefault(courier.Id);
+                <tr>
+                    <td>@courier.FullName</td>
+                    <td>@courier.Phone</td>
+                    <td class="font-monospace small">@(courier.BranchId?.ToString("N")[..8] ?? "-")</td>
+                    <td>
+                        @if (courier.IsActive)
+                        {
+                            <span class="badge bg-success">Yes</span>
+                        }
+                        else
+                        {
+                            <span class="badge bg-secondary">No</span>
+                        }
+                    </td>
+                    <td>
+                        @if (activeOrder is not null)
+                        {
+                            <span class="fw-semibold">@activeOrder.OrderCode</span>
+                            <StatusBadge Status="@activeOrder.Status" />
+                        }
+                        else
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private IReadOnlyList<UserResponse> _couriers = Array.Empty<UserResponse>();
+    private Dictionary<Guid, OrderResponse> _activeOrdersByCourier = new();
+    private RealtimeConnectionStatus _connectionStatus = RealtimeConnectionStatus.Disconnected;
+    private bool _isStale;
+    private bool _busy;
+    private string? _error;
+    private System.Threading.Timer? _staleTimer;
+    private static readonly TimeSpan StaleThreshold = TimeSpan.FromSeconds(60);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!EnsureLoggedIn())
+        {
+            return;
+        }
+
+        await LoadAsync();
+        await StartRealtimeAsync();
+
+        _staleTimer = new System.Threading.Timer(_ =>
+        {
+            var wasStale = _isStale;
+            _isStale = Realtime.LastMessageAt.HasValue &&
+                       DateTimeOffset.UtcNow - Realtime.LastMessageAt.Value > StaleThreshold;
+            if (_isStale != wasStale)
+            {
+                InvokeAsync(StateHasChanged);
+            }
+        }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+    }
+
+    private async Task StartRealtimeAsync()
+    {
+        Realtime.ConnectionStatusChanged += OnConnectionStatusChanged;
+        Realtime.StatusUpdated += OnStatusUpdated;
+
+        try
+        {
+            await Realtime.EnsureConnectedAsync();
+
+            if (Session.CurrentUser?.BranchId is { } branchId)
+            {
+                await Realtime.JoinBranchAsync(branchId);
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Realtime unavailable: {ex.Message}";
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            var couriersTask = ApiClient.GetUsersAsync(new UserFilterRequest { Role = UserRole.Courier, Limit = 200 });
+            var ordersTask = ApiClient.GetOrdersAsync(new OrderFilterRequest { Limit = 200 });
+
+            await Task.WhenAll(couriersTask, ordersTask);
+
+            _couriers = await couriersTask;
+            var orders = await ordersTask;
+
+            _activeOrdersByCourier = orders
+                .Where(o => o.CourierId.HasValue && o.Status is
+                    OrderStatus.Assigned or OrderStatus.Accepted or OrderStatus.PickedUp or OrderStatus.OnTheWay)
+                .GroupBy(o => o.CourierId!.Value)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(o => o.AssignedAt).First());
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnConnectionStatusChanged(RealtimeConnectionStatus status)
+    {
+        _connectionStatus = status;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnStatusUpdated(TrackingStatusUpdateEvent ev)
+    {
+        if (!ev.CourierId.HasValue)
+        {
+            return;
+        }
+
+        if (Enum.TryParse<OrderStatus>(ev.Status, out var parsed))
+        {
+            if (parsed is OrderStatus.Delivered or OrderStatus.Cancelled)
+            {
+                _activeOrdersByCourier.Remove(ev.CourierId.Value);
+            }
+            else if (_activeOrdersByCourier.TryGetValue(ev.CourierId.Value, out var existing))
+            {
+                _activeOrdersByCourier[ev.CourierId.Value] = CloneWithStatus(existing, parsed);
+            }
+
+            InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private bool EnsureLoggedIn()
+    {
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login", forceLoad: false);
+            return false;
+        }
+
+        return true;
+    }
+
+    private static OrderResponse CloneWithStatus(OrderResponse src, OrderStatus status)
+    {
+        return new OrderResponse
+        {
+            Id = src.Id, OrderCode = src.OrderCode, CustomerId = src.CustomerId,
+            BranchId = src.BranchId, CourierId = src.CourierId, Status = status,
+            RecipientName = src.RecipientName, RecipientPhone = src.RecipientPhone,
+            Address = src.Address, Lat = src.Lat, Lng = src.Lng,
+            AssignedAt = src.AssignedAt, DeliveredAt = src.DeliveredAt, CreatedAt = src.CreatedAt
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _staleTimer?.Dispose();
+        Realtime.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        Realtime.StatusUpdated -= OnStatusUpdated;
+
+        if (Session.CurrentUser?.BranchId is { } branchId)
+        {
+            await Realtime.LeaveBranchAsync(branchId);
+        }
+    }
+}

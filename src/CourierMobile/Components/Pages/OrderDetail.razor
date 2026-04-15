@@ -1,0 +1,164 @@
+@page "/orders/{OrderId:guid}"
+@using System.Globalization
+@inject CourierApiClient ApiClient
+@inject CourierSessionService Session
+@inject NavigationManager Navigation
+
+<h1>Order Detail</h1>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="alert alert-danger" role="alert">@_error</div>
+}
+
+<div class="d-flex align-items-center justify-content-between mb-3">
+    <button class="btn btn-link p-0" @onclick="BackToOrders">Back to assigned orders</button>
+    <button class="btn btn-outline-secondary btn-sm" @onclick="ReloadAsync" disabled="@_busy">Reload</button>
+</div>
+
+@if (_busy && _order is null)
+{
+    <div class="alert alert-secondary" role="alert">Loading order...</div>
+}
+else if (_order is null)
+{
+    <div class="alert alert-warning" role="alert">Order is unavailable for this courier.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title mb-2">@_order.OrderCode</h5>
+            <div class="mb-1"><span class="text-muted">Status:</span> @_order.Status</div>
+            <div class="mb-1"><span class="text-muted">Recipient:</span> @_order.RecipientName</div>
+            <div class="mb-1"><span class="text-muted">Phone:</span> @_order.RecipientPhone</div>
+            <div class="mb-2"><span class="text-muted">Address:</span> @_order.Address</div>
+            <a class="btn btn-outline-primary w-100" href="@BuildMapLink(_order)" target="_blank" rel="noopener noreferrer">
+                Open in map
+            </a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-body">
+            <div class="mb-2 fw-semibold">Update status</div>
+            <textarea class="form-control mb-3" rows="2" @bind="_note" placeholder="Optional note"></textarea>
+
+            <div class="d-grid gap-2">
+                <button class="btn btn-primary" @onclick="AcceptAsync" disabled="@(!CanAccept || _busy)">Accept</button>
+                <button class="btn btn-warning" @onclick="PickUpAsync" disabled="@(!CanPickUp || _busy)">Picked Up</button>
+                <button class="btn btn-info" @onclick="OnTheWayAsync" disabled="@(!CanStartOnTheWay || _busy)">On The Way</button>
+                <button class="btn btn-success" @onclick="DeliverAsync" disabled="@(!CanDeliver || _busy)">Delivered</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public Guid OrderId { get; set; }
+
+    private OrderResponse? _order;
+    private string _note = string.Empty;
+    private bool _busy;
+    private string? _error;
+
+    private bool CanAccept => _order?.Status == OrderStatus.Assigned;
+    private bool CanPickUp => _order?.Status == OrderStatus.Accepted;
+    private bool CanStartOnTheWay => _order?.Status == OrderStatus.PickedUp;
+    private bool CanDeliver => _order?.Status == OrderStatus.OnTheWay;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!await EnsureAuthenticatedAsync())
+        {
+            return;
+        }
+
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _order = await ApiClient.GetOrderAsync(OrderId);
+        }
+        catch (Exception ex)
+        {
+            _order = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task AcceptAsync()
+    {
+        await ExecuteActionAsync(() => ApiClient.AcceptAsync(OrderId, _note));
+    }
+
+    private async Task PickUpAsync()
+    {
+        await ExecuteActionAsync(() => ApiClient.PickUpAsync(OrderId, _note));
+    }
+
+    private async Task OnTheWayAsync()
+    {
+        await ExecuteActionAsync(() => ApiClient.StartOnTheWayAsync(OrderId, _note));
+    }
+
+    private async Task DeliverAsync()
+    {
+        await ExecuteActionAsync(() => ApiClient.DeliverAsync(OrderId, _note));
+    }
+
+    private async Task ExecuteActionAsync(Func<Task<OrderResponse>> action)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            _order = await action();
+            _note = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void BackToOrders()
+    {
+        Navigation.NavigateTo("/orders", forceLoad: false);
+    }
+
+    private static string BuildMapLink(OrderResponse order)
+    {
+        var lat = order.Lat.ToString(CultureInfo.InvariantCulture);
+        var lng = order.Lng.ToString(CultureInfo.InvariantCulture);
+        return $"https://maps.google.com/?q={lat},{lng}";
+    }
+
+    private async Task<bool> EnsureAuthenticatedAsync()
+    {
+        await Session.EnsureInitializedAsync(ApiClient);
+        if (!Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/login", forceLoad: false);
+            return false;
+        }
+
+        return true;
+    }
+}

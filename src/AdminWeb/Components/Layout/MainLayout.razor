@@ -1,0 +1,47 @@
+﻿@inherits LayoutComponentBase
+@inject AdminSession Session
+@inject NavigationManager Navigation
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4 justify-content-between">
+            <span>
+                @if (Session.CurrentUser is null)
+                {
+                    <span>Not logged in</span>
+                }
+                else
+                {
+                    <span>@Session.CurrentUser.FullName (@Session.CurrentUser.Role)</span>
+                }
+            </span>
+
+            @if (Session.IsAuthenticated)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="Logout">Logout</button>
+            }
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui">
+    An unhandled error has occurred.
+    <a href="" class="reload">Reload</a>
+    <a class="dismiss">🗙</a>
+</div>
+
+@code {
+    private void Logout()
+    {
+        Session.Clear();
+        Navigation.NavigateTo("/login", forceLoad: false);
+    }
+}

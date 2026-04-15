@@ -1,0 +1,72 @@
+@page "/login"
+@inject CustomerApiClient ApiClient
+@inject CustomerSession Session
+@inject NavigationManager Navigation
+
+<PageTitle>Sign In</PageTitle>
+
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5 col-lg-4">
+        <div class="card shadow-sm">
+            <div class="card-body p-4">
+                <h4 class="card-title mb-4 text-center">Track My Order</h4>
+
+                @if (!string.IsNullOrWhiteSpace(_error))
+                {
+                    <div class="alert alert-danger">@_error</div>
+                }
+
+                <EditForm Model="_login" OnValidSubmit="SubmitAsync" FormName="customer-login">
+                    <div class="mb-3">
+                        <label class="form-label">Phone</label>
+                        <InputText class="form-control" @bind-Value="_login.Phone" placeholder="+998..." />
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">Password</label>
+                        <InputText class="form-control" type="password" @bind-Value="_login.Password" />
+                    </div>
+
+                    <button class="btn btn-primary w-100" disabled="@_busy" type="submit">
+                        @(_busy ? "Signing in..." : "Sign in")
+                    </button>
+                </EditForm>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private readonly LoginRequest _login = new();
+    private bool _busy;
+    private string? _error;
+
+    protected override void OnInitialized()
+    {
+        if (Session.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/", forceLoad: false);
+        }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _error = null;
+        _busy = true;
+
+        try
+        {
+            var tokens = await ApiClient.LoginAsync(_login);
+            Session.Set(tokens);
+            Navigation.NavigateTo("/", forceLoad: false);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}
